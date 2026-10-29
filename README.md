@@ -68,7 +68,16 @@ a manual pre-step.
 
 ## Install
 
-See [INSTALL.md](INSTALL.md). It is written for an agent to follow step by step.
+macOS on Apple silicon. With Homebrew and Node installed:
+
+```sh
+npm install -g @opencode/cli
+opencode plugin add github:sbacaro/CLI-Startup
+opencode plugin add github:obra/superpowers
+```
+
+Open OpenCode and say `Run startup_provision`. That installs the rest. The full
+copy-paste sequence, including Homebrew, is in [INSTALL.md](INSTALL.md).
 
 ## Develop
 

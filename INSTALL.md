@@ -1,113 +1,155 @@
-# Configure OpenCode
+# Install
 
-Instructions for an agent. Follow them in order, run each command, and stop if a
-step fails. Every step is safe to re-run.
+Copy one block at a time into Terminal. Every block is safe to re-run.
 
-Target: macOS on Apple silicon. Homebrew installs to `/opt/homebrew`.
+If a block fails, stop and fix it before the next one: each depends on the
+previous.
 
-## 1. Install the command-line foundation
+Target: macOS on Apple silicon (Homebrew lives in `/opt/homebrew`).
+
+## 1. Homebrew
 
 ```sh
 command -v brew >/dev/null || /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 eval "$(/opt/homebrew/bin/brew shellenv)"
 ```
 
+## 2. Tools
+
 ```sh
 brew install gh node openjdk@21 ffmpeg yt-dlp uv tesseract unar
-brew install --cask ghidra
 ```
 
-`ghidra` is only needed by REA. Skip it if reverse engineering is not wanted.
-
-## 2. Export the Ghidra paths
-
-REA validates that its paths are absolute and refuses to start otherwise. Export
-them so the plugin can pass them through:
-
-```sh
-export GHIDRA_INSTALL_DIR="$HOME/Library/ghidra_12.1.4_PUBLIC"
-export JAVA_HOME="$(/usr/libexec/java_home -v 21)"
-```
-
-Add both lines to `~/.zshrc` so they survive a new shell.
-
-## 3. Install the agent CLIs
+## 3. OpenCode and the plugins
 
 ```sh
 npm install -g @opencode/cli
-```
-
-## 4. Install the startup plugin
-
-```sh
 opencode plugin add github:sbacaro/CLI-Startup
+opencode plugin add github:obra/superpowers
 ```
 
-Confirm it registered:
+Check: `opencode plugin list` shows both `opencode-startup` and `superpowers`.
+
+Superpowers is a separate plugin, so it is added explicitly. The startup plugin
+cannot install it for you.
+
+## 4. Shell environment
+
+Makes the tools installable and visible to every new terminal:
 
 ```sh
-opencode plugin list
+cat >> ~/.zshrc <<'EOF'
+export PATH="$HOME/.local/bin:$PATH"
+export JAVA_HOME="$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home"
+export GHIDRA_INSTALL_DIR="$(ls -d "$HOME"/Library/ghidra_*_PUBLIC 2>/dev/null | tail -1)"
+EOF
+source ~/.zshrc
 ```
 
-## 5. Provision the rest from inside OpenCode
+`GHIDRA_INSTALL_DIR` stays empty until Ghidra is installed (step 8). That is
+fine: only REA uses it.
 
-Open OpenCode in any directory and ask the agent to run `startup_provision`. It
-installs whatever is missing, using each project's own installer:
+## 5. Provision
 
-- `rea-agents` via npm, when the `rea` binary is absent
-- `graphifyy` via `uv tool install`, when `graphify-mcp` is absent
-- `superpowers`, `ui-ux-pro-max`, `design-motion-principles` when their files are absent
+Open OpenCode in any folder and type:
 
-To see what would happen first, ask for `startup_status`, or call
-`startup_provision` with `dryRun` set to true.
+```text
+Run startup_provision
+```
 
-## 6. Add provider credentials
+It installs whatever is missing, using each project's own installer. To preview
+without installing anything:
+
+```text
+Run startup_provision with dryRun
+```
+
+## 6. Provider keys
+
+Inside OpenCode, type:
 
 ```text
 /connect
 ```
 
-Choose **Kodeo**, paste the key, confirm. Repeat for **Globant**. Model lists
-appear as soon as a key is accepted; no restart and no configuration edit.
+Pick **Kodeo**, paste the key, confirm. Repeat for **Globant**. Models appear as
+soon as a key is accepted. A provider you skip simply has no models.
 
-Skipping a provider leaves it with no models. Nothing else breaks.
+## 7. MCP logins
 
-## 7. Authenticate the remote MCP servers
+```text
+/mcps
+```
 
-Supabase and Cloudflare use OAuth. Run `/mcps`, select each server, and sign in.
+Sign in to **Supabase** and **Cloudflare**. REA needs no login. Graphify starts
+after a graph exists for the project (step 9).
 
-REA connects without authentication once step 2 is done. Graphify starts once a
-graph exists for the project (run `/graphify .` in your assistant).
+## 8. Reverse engineering (optional)
 
-## 8. Verify
+Only needed for REA. Ghidra is not in Homebrew:
+
+1. Download the latest 12.1.x release from
+   <https://github.com/NationalSecurityAgency/ghidra/releases>.
+2. Unzip it into `~/Library`, giving a folder such as
+   `~/Library/ghidra_12.1.4_PUBLIC`.
+3. Open a new terminal and run `rea doctor`.
+
+## 9. Skill per project
+
+The motion-design skill is installed per project. Inside the project folder:
+
+```sh
+npx -y skills add kylezantos/design-motion-principles
+```
+
+It lands in `.agents/skills/` and is available immediately. Repeat in any other
+project that needs it.
+
+## 10. Verify
 
 ```sh
 opencode mcp list
 ```
 
-Then, inside OpenCode, run `startup_status`.
+Then inside OpenCode:
 
-## Updating later
+```text
+Run startup_status
+```
 
-- OpenCode updates itself when `update` is `"auto"`.
-- The plugin is a git spec, so it refreshes on restart.
-- Ask for `startup_update` to pull each component's latest release.
+Every line should read `present (current)`.
 
-## Notes
+## Updating
 
-`ui-ux-pro-max-cli` writes to `./.opencode/skills`, which is project-scoped. Its
-`--global` flag targets `~/.opencode/skills`, a directory OpenCode does not scan,
-so the plugin never passes it.
+```text
+Run startup_update
+```
 
-## Troubleshooting
+OpenCode updates itself. Plugins are git specs, so they refresh on restart, or
+run `opencode plugin update`.
 
-**A provider shows no models.** No credential yet. Run `/connect`.
+## Problems
 
-**`rea` fails with "must be absolute".** `GHIDRA_INSTALL_DIR` or `JAVA_HOME` is
-unset. Redo step 2.
+**A provider shows no models.** No key yet: run `/connect`.
 
-**`graphify` fails to start.** No graph has been built for this project yet.
-Run `/graphify .` in your assistant, then reload.
+**REA says a path "must be absolute".** `GHIDRA_INSTALL_DIR` or `JAVA_HOME` is
+empty. Re-run step 4, then open a new terminal.
 
-**A model shows no cost.** It has no entry in models.dev, typically a
+**`graphify-mcp` is not found.** `uv` installs into `~/.local/bin`. Link it into
+Homebrew's directory:
+
+```sh
+ln -sf "$HOME/.local/bin/graphify-mcp" /opt/homebrew/bin/graphify-mcp
+```
+
+**Graphify exits at startup.** No graph yet: run `/graphify .` in your assistant.
+
+**Superpowers skills do not appear.** Add the plugin again, then restart
+OpenCode:
+
+```sh
+opencode plugin add github:obra/superpowers
+```
+
+**A model shows no cost.** It has no models.dev entry, usually a
 gateway-internal alias. Limits still come from the gateway.
