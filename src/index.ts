@@ -1,23 +1,43 @@
 import { Plugin } from "@opencode/plugin"
 import type { Context } from "@opencode/plugin/promise/plugin"
+import { spawnSync } from "node:child_process"
+import { homedir } from "node:os"
 
 import { CatalogCache } from "./cache.ts"
 import { buildProviderModels, loadCatalog } from "./catalog.ts"
-import { probeAll } from "./components.ts"
 import { discoverModels, type DiscoveredModel } from "./discovery.ts"
-import { runCommand } from "./exec.ts"
-import { providers, skills, type ProviderSpec } from "./manifest.ts"
+import { expandHome, runCommand } from "./exec.ts"
+import { mcps, providers, skills, type ProviderSpec } from "./manifest.ts"
+import { planInstall, type Environment } from "./planner.ts"
 import { UPDATE_POLICY, describeStatus, type ComponentStatus } from "./policy.ts"
 import { toModelInfo, toProviderInfo } from "./provision.ts"
 import type { MergedModel } from "./resolve.ts"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
+type Registration = { dispose(): Promise<void> }
+
 function discoveryKey(providerID: string): string {
   return `discovery/${providerID}`
 }
 
-type Registration = { dispose(): Promise<void> }
+/** The real machine, as the planner sees it. */
+const environment: Environment = {
+  hasCommand: async (command) => {
+    const result = await runCommand(`command -v ${command}`, { timeoutMs: 15_000 })
+    return result.code === 0 && result.stdout.trim().length > 0
+  },
+  exists: (path) => {
+    const result = runCommandSync(`test -e "${expandHome(path, homedir())}"`)
+    return result === 0
+  },
+}
+
+function runCommandSync(command: string): number {
+  // A synchronous existence check keeps the planner interface simple; `test`
+  // returns immediately and never blocks on I/O of any size.
+  return spawnSync(process.env.SHELL || "/bin/sh", ["-c", command], { stdio: "ignore" }).status ?? 1
+}
 
 /**
  * Reads the credential the user entered in the OpenCode UI.
@@ -94,17 +114,25 @@ export default Plugin.define({
       }
     })
 
+    // MCP servers are declared as data, so re-provisioning is idempotent and a
+    // server the user configured by hand is left untouched.
+    await ctx.mcp.transform((editor) => {
+      for (const mcp of mcps) {
+        if (editor.get(mcp.id)) continue
+        editor.set(mcp.id, mcp.config(process.env) as never)
+      }
+    })
+
     let disposed = false
     let active: Registration | undefined
 
     /**
-     * Publishes the current inventory.
+     * Publishes the provider inventory.
      *
-     * The transform is registered only once discovery has finished. Registering
-     * an empty provider first and patching models in later does not work: a
-     * provider added by an earlier transform does not pick up a `models.set`
-     * from a later one. Disposing the previous registration also keeps repeated
-     * refreshes from stacking transforms.
+     * The transform is registered only once discovery has finished, and the
+     * previous registration is disposed first. A provider added by an earlier
+     * transform does not pick up a `models.set` from a later one, so the
+     * inventory has to arrive with the provider itself.
      */
     const publish = async () => {
       const states = await Promise.all(providers.map((spec) => loadProviderState(ctx, spec, cache)))
@@ -117,9 +145,7 @@ export default Plugin.define({
           const info = toProviderInfo(state.spec)
           const models = state.models.map((model) => toModelInfo(model, state.spec.id))
 
-          if (editor.get(state.spec.id)) {
-            editor.remove(state.spec.id)
-          }
+          if (editor.get(state.spec.id)) editor.remove(state.spec.id)
           editor.add({ info, models })
         }
       })
@@ -127,8 +153,6 @@ export default Plugin.define({
       await ctx.provider.reload()
     }
 
-    // Await the first publish so the picker is populated before the first
-    // request, rather than racing it.
     await publish().catch((error) => {
       console.warn(
         `[startup] provider publish failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -159,25 +183,78 @@ export default Plugin.define({
     await ctx.tool.transform((editor) => {
       editor.namespace({
         name: "startup",
-        description: "Keep this OpenCode installation and its third-party skills current.",
+        description: "Provision and keep this OpenCode installation current.",
       })
 
       editor.add({
         name: "status",
         description:
-          "Report every component this installation tracks, with its installed and available version.",
+          "Report MCP servers, skills, and providers, marking anything missing on this machine.",
         input: { type: "object", additionalProperties: false },
         options: { namespace: "startup", codemode: true },
         execute: async () => {
-          const components = await probeAll(skills)
+          const plan = await planInstall(mcps, skills, environment)
+          const components: ComponentStatus[] = [
+            ...mcps.map((mcp) => ({
+              id: mcp.id,
+              installed: plan.missing.includes(mcp.id) ? undefined : "present",
+              available: undefined,
+              state: plan.missing.includes(mcp.id) ? ("missing" as const) : ("current" as const),
+              action: mcp.update ?? mcp.install,
+            })),
+            ...skills.map((skill) => ({
+              id: skill.id,
+              installed: plan.missing.includes(skill.id) ? undefined : "present",
+              available: undefined,
+              state: plan.missing.includes(skill.id) ? ("missing" as const) : ("current" as const),
+              action: skill.update,
+            })),
+          ]
           return { content: describeStatus(components) }
         },
       })
 
       editor.add({
-        name: "update",
+        name: "provision",
         description:
-          "Update one component by id using its upstream installer, or pass 'all' for every component.",
+          "Install everything that is missing, using each project's own installer. Idempotent: an already provisioned machine runs nothing.",
+        input: {
+          type: "object",
+          properties: {
+            dryRun: { type: "boolean", description: "Report the commands without running them." },
+          },
+          additionalProperties: false,
+        },
+        options: { namespace: "startup", codemode: true },
+        execute: async (input, context) => {
+          const { dryRun } = (input ?? {}) as { dryRun?: boolean }
+          const plan = await planInstall(mcps, skills, environment)
+
+          if (plan.install.length === 0) {
+            return { content: "Everything is already provisioned." }
+          }
+          if (dryRun) {
+            return { content: plan.install.map((cmd) => `would run: ${cmd}`).join("\n") }
+          }
+
+          const lines: string[] = []
+          for (const command of plan.install) {
+            await context.progress({ status: command })
+            const result = await runCommand(command, { signal: context.signal })
+            const tail = `${result.stdout}${result.stderr}`.trim().split("\n").slice(-2).join("\n")
+            lines.push(`${result.code === 0 ? "ok  " : `fail`} ${command}`)
+            if (result.code !== 0 && tail) lines.push(tail)
+          }
+
+          // Newly installed MCP prerequisites may need the server list rebuilt.
+          await ctx.mcp.reload()
+          return { content: lines.join("\n") }
+        },
+      })
+
+      editor.add({
+        name: "update",
+        description: "Update every component through its own upstream command.",
         input: {
           type: "object",
           properties: {
@@ -189,25 +266,22 @@ export default Plugin.define({
         options: { namespace: "startup", codemode: true },
         execute: async (input, context) => {
           const { component } = input as { component: string }
-          const targets = component === "all" ? skills : skills.filter((s) => s.id === component)
+          const targets = [
+            ...mcps.filter((m) => m.update).map((m) => ({ id: m.id, update: m.update! })),
+            ...skills.map((s) => ({ id: s.id, update: s.update })),
+          ].filter((t) => component === "all" || t.id === component)
 
           if (targets.length === 0) {
-            return {
-              content: `Unknown component: ${component}. Known: ${skills.map((s) => s.id).join(", ")}`,
-            }
+            const known = [...mcps.map((m) => m.id), ...skills.map((s) => s.id)]
+            return { content: `Unknown component: ${component}. Known: ${known.join(", ")}` }
           }
 
-          // Each installer is the upstream project's own command, run verbatim.
-          // A failure on one component must not stop the others.
           const lines: string[] = []
           for (const target of targets) {
             await context.progress({ status: `updating ${target.id}` })
             const result = await runCommand(target.update, { signal: context.signal })
-            const tail = `${result.stdout}${result.stderr}`.trim().split("\n").slice(-3).join("\n")
             lines.push(`${target.id}: ${result.code === 0 ? "ok" : `failed (${result.code})`}`)
-            if (tail) lines.push(tail)
           }
-
           return { content: lines.join("\n") }
         },
       })

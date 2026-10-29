@@ -33,8 +33,9 @@ test("says so when there is nothing to report", () => {
   assert.equal(describeStatus([]), "No components configured.")
 })
 
-test("the policy names both tools and the credential rule", () => {
+test("the policy names every tool and the credential rule", () => {
   assert.match(UPDATE_POLICY, /startup_status/)
+  assert.match(UPDATE_POLICY, /startup_provision/)
   assert.match(UPDATE_POLICY, /startup_update/)
   assert.match(UPDATE_POLICY, /never in a repository/i)
 })

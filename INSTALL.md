@@ -12,125 +12,102 @@ command -v brew >/dev/null || /bin/bash -c "$(curl -fsSL https://raw.githubuserc
 eval "$(/opt/homebrew/bin/brew shellenv)"
 ```
 
-Then the packages this setup depends on:
-
 ```sh
-brew install gh node openjdk@21 ffmpeg yt-dlp uv swiftformat swiftlint xcodegen tesseract unar
+brew install gh node openjdk@21 ffmpeg yt-dlp uv tesseract unar
 brew install --cask ghidra
 ```
 
-Graphify is installed from its official PyPI package in step 5; it is not a
-Homebrew package.
+`ghidra` is only needed by REA. Skip it if reverse engineering is not wanted.
 
-`ghidra` is only needed by REA. Skip it if reverse engineering is not wanted, and
-skip step 5.
+## 2. Export the Ghidra paths
 
-## 2. Install the agent CLIs
+REA validates that its paths are absolute and refuses to start otherwise. Export
+them so the plugin can pass them through:
+
+```sh
+export GHIDRA_INSTALL_DIR="$HOME/Library/ghidra_12.1.4_PUBLIC"
+export JAVA_HOME="$(/usr/libexec/java_home -v 21)"
+```
+
+Add both lines to `~/.zshrc` so they survive a new shell.
+
+## 3. Install the agent CLIs
 
 ```sh
 npm install -g @opencode/cli
-npm install -g rea-agents
 ```
 
-Verify:
-
-```sh
-opencode --version
-rea --version
-```
-
-## 3. Install the startup plugin
+## 4. Install the startup plugin
 
 ```sh
 opencode plugin add github:sbacaro/CLI-Startup
 ```
 
-This writes the plugin into the global configuration and installs it from the
-repository. Confirm it is registered:
+Confirm it registered:
 
 ```sh
 opencode plugin list
 ```
 
-## 4. Add provider credentials
+## 5. Provision the rest from inside OpenCode
 
-The plugin registers two providers and their model catalogs. Neither ships a key.
-Add each key through the OpenCode UI, not in a file:
+Open OpenCode in any directory and ask the agent to run `startup_provision`. It
+installs whatever is missing, using each project's own installer:
 
-1. Open OpenCode.
-2. Run `/connect`.
-3. Choose **Kodeo**, paste the key, confirm.
-4. Repeat for **Globant**.
+- `rea-agents` via npm, when the `rea` binary is absent
+- `graphifyy` via `uv tool install`, when `graphify-mcp` is absent
+- `superpowers`, `ui-ux-pro-max`, `design-motion-principles` when their files are absent
 
-Model lists appear as soon as a key is accepted. The plugin discovers them from
-each gateway's `/v1/models` endpoint and prices them from models.dev, so no
-restart and no configuration edit is required.
+To see what would happen first, ask for `startup_status`, or call
+`startup_provision` with `dryRun` set to true.
 
-If a provider is skipped, it simply has no models. Nothing else breaks.
+## 6. Add provider credentials
 
-## 5. Install the third-party skills
-
-Each skill stays in its own upstream repository. These commands install them and
-are the same commands that update them later.
-
-```sh
-opencode plugin add github:obra/superpowers
+```text
+/connect
 ```
 
-```sh
-cd ~/Github   # or any project directory
-npx -y ui-ux-pro-max-cli@latest init --ai opencode
-npx -y skills add kylezantos/design-motion-principles
-```
+Choose **Kodeo**, paste the key, confirm. Repeat for **Globant**. Model lists
+appear as soon as a key is accepted; no restart and no configuration edit.
 
-Note: `ui-ux-pro-max-cli` writes to `./.opencode/skills`, which is project-scoped.
-Its `--global` flag targets `~/.opencode/skills`, a directory OpenCode does not
-read, so do not use `--global`.
+Skipping a provider leaves it with no models. Nothing else breaks.
 
-Register REA with OpenCode so its MCP server and skill are wired up:
+## 7. Authenticate the remote MCP servers
 
-```sh
-rea setup --client opencode --yes
-```
+Supabase and Cloudflare use OAuth. Run `/mcps`, select each server, and sign in.
 
-Install Graphify from its official PyPI package and register its OpenCode skill
-and project hook:
+REA connects without authentication once step 2 is done. Graphify starts once a
+graph exists for the project (run `/graphify .` in your assistant).
 
-```sh
-uv tool install graphifyy
-graphify install --platform opencode
-```
-
-The package name is intentionally `graphifyy` (with two `y` characters); the
-installed CLI remains `graphify`. The global OpenCode skill is written to
-`~/.config/opencode/skills/graphify/`, and Graphify writes its project hook under
-`.opencode/plugins/` when run from a project.
-
-## 6. Verify
+## 8. Verify
 
 ```sh
 opencode mcp list
 ```
 
-Expected: `rea` connected (and `supabase`/`cloudflare` if you added them
-yourself). Then, inside OpenCode, ask the agent to run `startup_status`.
+Then, inside OpenCode, run `startup_status`.
 
 ## Updating later
 
-Nothing here needs manual maintenance:
-
 - OpenCode updates itself when `update` is `"auto"`.
 - The plugin is a git spec, so it refreshes on restart.
-- Skills update through their own installers; `startup_update` prints the exact
-  command for any component that is behind.
+- Ask for `startup_update` to pull each component's latest release.
+
+## Notes
+
+`ui-ux-pro-max-cli` writes to `./.opencode/skills`, which is project-scoped. Its
+`--global` flag targets `~/.opencode/skills`, a directory OpenCode does not scan,
+so the plugin never passes it.
 
 ## Troubleshooting
 
-**Providers show no models.** No credential yet. Run `/connect` and add the key.
+**A provider shows no models.** No credential yet. Run `/connect`.
 
-**A model shows no cost.** It has no entry in models.dev — typically a
+**`rea` fails with "must be absolute".** `GHIDRA_INSTALL_DIR` or `JAVA_HOME` is
+unset. Redo step 2.
+
+**`graphify` fails to start.** No graph has been built for this project yet.
+Run `/graphify .` in your assistant, then reload.
+
+**A model shows no cost.** It has no entry in models.dev, typically a
 gateway-internal alias. Limits still come from the gateway.
-
-**`ui-ux-pro-max` skills are missing.** They were installed with `--global`, which
-writes to a directory OpenCode does not scan. Re-run without `--global` from a
-project directory.

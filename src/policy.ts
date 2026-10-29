@@ -10,9 +10,11 @@ export const UPDATE_POLICY = `**opencode-startup**
 
 This OpenCode is provisioned by the \`opencode-startup\` plugin. Keep it current.
 
-- Before changing providers, MCP servers, or models, run \`startup_status\`.
-- When a component reports an available update, run \`startup_update\` for that
-  component rather than editing configuration by hand.
+- Run \`startup_status\` before changing MCP servers, skills, or providers.
+- When something is missing or behind, run \`startup_provision\` to install it or
+  \`startup_update\` to refresh it, rather than editing configuration by hand.
+- MCP servers, skills, and providers are declared in \`src/manifest.ts\`. Change
+  that file rather than a generated config, so a re-provision stays idempotent.
 - Provider model lists are discovered from each gateway's \`/v1/models\` and
   priced from models.dev. Never hardcode a model catalog: a model the gateway
   adds tomorrow appears on the next refresh without a plugin release.

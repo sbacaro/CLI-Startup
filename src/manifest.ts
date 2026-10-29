@@ -1,16 +1,20 @@
 /**
- * Provider identity only. The model catalog is discovered from each
- * provider's own `/v1/models` endpoint once a credential exists, so this file
- * never drifts from what the gateway actually serves.
+ * The desired state of a provisioned OpenCode, as data.
+ *
+ * Every entry answers three questions the runtime asks: what should exist, how
+ * is it installed from its own upstream, and how do we know it is there. Keeping
+ * that in one file means the installer, the status tool, and the tests all read
+ * the same truth instead of drifting apart.
  */
 
+/** A model provider the runtime should expose. */
 export type ProviderSpec = {
   id: string
   name: string
   baseURL: string
-  /** Environment variables OpenCode may read the credential from. */
+  /** Environment variables that may carry the credential. */
   env: string[]
-  /** Human-facing label for the key prompt in the OpenCode UI. */
+  /** Label for the key prompt in the OpenCode UI. */
   credentialLabel: string
 }
 
@@ -32,22 +36,116 @@ export const providers: ProviderSpec[] = [
 ]
 
 /**
- * Third-party artifacts this plugin verifies but never copies or vendors.
- * `install` and `update` are the upstream project's own commands, run verbatim.
+ * An MCP server the runtime should connect.
+ *
+ * `install` covers anything that must exist on disk first; `config` is the
+ * server definition handed to the MCP editor. Both are declarative so a
+ * re-provision is a no-op.
  */
-export type UpstreamSkill = {
+export type McpSpec = {
+  id: string
+  name: string
+  /** Upstream project that owns this server. */
+  repository: string
+  /** Command that installs prerequisites, or undefined when none are needed. */
+  install?: string
+  /** Command that refreshes the prerequisites. */
+  update?: string
+  /** How to verify the prerequisites are present. */
+  verify?: { command: string; timeoutMs?: number }
+  /**
+   * The server definition registered with OpenCode.
+   *
+   * A function of the process environment rather than a literal: a variable
+   * that is unset must be omitted entirely. Passing `{env:NAME}` through
+   * verbatim would send an empty string, and servers that validate their paths
+   * reject that at startup.
+   */
+  config(env: NodeJS.ProcessEnv): Record<string, unknown>
+}
+
+export const mcps: McpSpec[] = [
+  {
+    id: "rea",
+    name: "REA",
+    repository: "https://github.com/morluto/rea",
+    install: "npm install -g rea-agents",
+    update: "npm install -g rea-agents@latest",
+    verify: { command: "rea --version" },
+    config: (env) => {
+      const environment: Record<string, string> = { JAVA_OPTS: "-Xmx8g" }
+      // REA validates that both paths are absolute, so they are only passed
+      // when actually set; an empty string is rejected outright.
+      if (env.GHIDRA_INSTALL_DIR) environment.GHIDRA_INSTALL_DIR = env.GHIDRA_INSTALL_DIR
+      if (env.JAVA_HOME) environment.JAVA_HOME = env.JAVA_HOME
+      if (env.GHIDRA_INSTALL_DIR) environment.REA_GHIDRA_STARTUP_TIMEOUT_MS = "3600000"
+
+      return {
+        type: "local",
+        command: ["rea", "mcp"],
+        disabled: false,
+        timeout: { startup: 60_000, catalog: 60_000 },
+        environment,
+      }
+    },
+  },
+  {
+    id: "supabase",
+    name: "Supabase",
+    repository: "https://github.com/supabase/mcp",
+    config: () => ({
+      type: "remote",
+      url: "https://mcp.supabase.com/mcp",
+    }),
+  },
+  {
+    id: "cloudflare",
+    name: "Cloudflare",
+    repository: "https://github.com/cloudflare/mcp-server-cloudflare",
+    config: () => ({
+      type: "remote",
+      url: "https://mcp.cloudflare.com/mcp",
+    }),
+  },
+  {
+    id: "graphify",
+    name: "Graphify",
+    repository: "https://github.com/Graphify-Labs/graphify",
+    install: "uv tool install graphifyy",
+    update: "uv tool upgrade graphifyy",
+    verify: { command: "graphify-mcp --help" },
+    // The package ships a dedicated `graphify-mcp` entrypoint for
+    // `graphify.serve:_main`, so the server is addressed directly rather than
+    // through a CLI subcommand. It reads the graph at the workspace default
+    // path and exits when none has been built yet.
+    config: () => ({
+      type: "local",
+      command: ["graphify-mcp"],
+      disabled: false,
+      timeout: { startup: 30_000, catalog: 30_000 },
+    }),
+  },
+]
+
+/**
+ * A third-party skill, installed and updated only by its own upstream.
+ *
+ * `verify` names files the installer writes. Nothing is vendored: the plugin
+ * never holds a copy of another project's skill content.
+ */
+export type SkillSpec = {
   id: string
   name: string
   repository: string
   install: string
   update: string
-  /** Paths, relative to the working directory, that indicate presence. */
+  /** Paths that must exist for the skill to be considered installed. */
   markers: string[]
-  /** Executable whose `--version` reports the installed version. */
-  versionCommand?: string
+  /** Where the installer writes the skill, for reporting. */
+  target: string
 }
 
-export const skills: UpstreamSkill[] = [
+export const skills: SkillSpec[] = [
   {
     id: "superpowers",
     name: "Superpowers",
@@ -55,6 +153,7 @@ export const skills: UpstreamSkill[] = [
     install: "opencode plugin add github:obra/superpowers",
     update: "opencode plugin update superpowers",
     markers: [],
+    target: "OpenCode plugin registry",
   },
   {
     id: "ui-ux-pro-max",
@@ -63,6 +162,7 @@ export const skills: UpstreamSkill[] = [
     install: "npx -y ui-ux-pro-max-cli@latest init --ai opencode",
     update: "npx -y ui-ux-pro-max-cli@latest update --ai opencode",
     markers: [".opencode/skills/ui-ux-pro-max/SKILL.md"],
+    target: ".opencode/skills/ui-ux-pro-max",
   },
   {
     id: "design-motion-principles",
@@ -71,44 +171,15 @@ export const skills: UpstreamSkill[] = [
     install: "npx -y skills add kylezantos/design-motion-principles",
     update: "npx -y skills add kylezantos/design-motion-principles",
     markers: [".opencode/skills/design-motion-principles/SKILL.md"],
-  },
-  {
-    id: "rea",
-    name: "REA",
-    repository: "https://github.com/morluto/rea",
-    install: "rea setup --client opencode --yes",
-    update: "rea update && rea setup --client opencode --yes",
-    markers: [],
-    versionCommand: "rea",
-  },
-  {
-    id: "graphify",
-    name: "Graphify",
-    repository: "https://github.com/Graphify-Labs/graphify",
-    install: "uv tool install graphifyy && graphify install --platform opencode",
-    update: "uv tool upgrade graphifyy && graphify install --platform opencode",
-    markers: ["~/.config/opencode/skills/graphify/SKILL.md"],
-    versionCommand: "graphify",
+    target: ".opencode/skills/design-motion-principles",
   },
 ]
 
-/** Homebrew formulae and casks the machine needs before the plugin is useful. */
+/** Homebrew packages the machine needs before any of this works. */
 export const brewPackages = {
-  formulae: [
-    "gh",
-    "node",
-    "openjdk@21",
-    "ffmpeg",
-    "yt-dlp",
-    "uv",
-    "swiftformat",
-    "swiftlint",
-    "xcodegen",
-    "tesseract",
-    "unar",
-  ],
+  formulae: ["gh", "node", "openjdk@21", "ffmpeg", "yt-dlp", "uv", "tesseract", "unar"],
   casks: ["ghidra"],
 }
 
-/** npm packages installed globally. */
+/** Global npm packages. */
 export const npmPackages = ["@opencode/cli", "rea-agents"]
