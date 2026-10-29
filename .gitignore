@@ -2,3 +2,5 @@ node_modules/
 *.log
 .DS_Store
 dist/
+# Written by `graphify install` inside whichever project it runs in.
+.opencode/

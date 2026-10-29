@@ -21,6 +21,17 @@ This OpenCode is provisioned by the \`opencode-startup\` plugin. Keep it current
 - A model with no catalog match keeps its gateway limits and reports cost as
   unknown. Do not invent a price for it.
 - Provider credentials belong in the OpenCode UI, never in a repository.
+- A component that ships its own setup command (\`rea setup\`, \`graphify install\`)
+  owns its registration and workflow files. Run that command instead of writing
+  an MCP entry by hand: a hand-written entry leaves the matching skill missing.
+- Ghidra and Java are prerequisites, not dependencies of the MCP server. Never
+  hardcode their paths: resolve them from \`brew --prefix\` and from the JDK the
+  installed Ghidra declares, and omit \`JAVA_HOME\` entirely when it cannot be
+  resolved. An empty value makes REA refuse to start.
+- The GitHub MCP resolves its token inside its own command line, from
+  \`gh auth token\`. Never place a token in a server's \`environment\`: the
+  keychain already stores it, and a server's config is data the user can export,
+  inspect, or share.
 `
 
 export type ComponentStatus = {

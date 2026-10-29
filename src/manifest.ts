@@ -51,6 +51,13 @@ export type McpSpec = {
   install?: string
   /** Command that refreshes the prerequisites. */
   update?: string
+  /**
+   * Upstream command that registers the server with OpenCode and installs its
+   * matching workflow, when the project owns that integration.
+   */
+  setup?: string
+  /** Files that prove an upstream setup command has been applied. */
+  setupMarkers?: string[]
   /** How to verify the prerequisites are present. */
   verify?: { command: string; timeoutMs?: number }
   /**
@@ -70,7 +77,12 @@ export const mcps: McpSpec[] = [
     name: "REA",
     repository: "https://github.com/morluto/rea",
     install: "npm install -g rea-agents",
-    update: "npm install -g rea-agents@latest",
+    update: "rea update",
+    // REA's setup owns both the OpenCode registration and the matching skill.
+    // A hand-written `rea mcp` entry leaves the skill missing and ignores the
+    // provider paths that setup knows how to validate.
+    setup: "rea setup --client opencode --skill --yes",
+    setupMarkers: ["~/.config/opencode/opencode.json", "~/.agents/skills/reverse-engineer-anything/SKILL.md"],
     verify: { command: "rea --version" },
     config: (env) => {
       const environment: Record<string, string> = { JAVA_OPTS: "-Xmx8g" }
@@ -111,8 +123,12 @@ export const mcps: McpSpec[] = [
     id: "graphify",
     name: "Graphify",
     repository: "https://github.com/Graphify-Labs/graphify",
-    install: "uv tool install graphifyy",
-    update: "uv tool upgrade graphifyy",
+    // `graphify-mcp` imports the MCP SDK, which the base package does not
+    // install. The extra is required for the server itself, not only the CLI.
+    install: 'uv tool install "graphifyy[mcp]"',
+    update: 'uv tool upgrade "graphifyy[mcp]"',
+    setup: "graphify install --platform opencode",
+    setupMarkers: ["~/.config/opencode/skills/graphify/SKILL.md"],
     verify: { command: "graphify-mcp --help" },
     // The package ships a dedicated `graphify-mcp` entrypoint for
     // `graphify.serve:_main`, so the server is addressed directly rather than
@@ -123,6 +139,24 @@ export const mcps: McpSpec[] = [
       command: ["graphify-mcp"],
       disabled: false,
       timeout: { startup: 30_000, catalog: 30_000 },
+    }),
+  },
+  {
+    id: "github",
+    name: "GitHub",
+    repository: "https://github.com/github/github-mcp-server",
+    // The token is resolved by the child process at startup, not by the plugin.
+    // The shell wrapper keeps the secret in the `gh` keychain and reads it
+    // fresh on every launch, so no credential enters this project's data and a
+    // rotated token takes effect on the next start.
+    config: () => ({
+      type: "local",
+      command: ["sh", "-c", 'GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token)" exec github-mcp-server stdio'],
+      disabled: false,
+      timeout: { startup: 30_000, catalog: 60_000 },
+      environment: {
+        GITHUB_TOOLSETS: "context,repos,issues,pull_requests,actions",
+      },
     }),
   },
 ]
@@ -177,8 +211,21 @@ export const skills: SkillSpec[] = [
 
 /** Homebrew packages the machine needs before any of this works. */
 export const brewPackages = {
-  formulae: ["gh", "node", "openjdk@21", "ffmpeg", "yt-dlp", "uv", "tesseract", "unar"],
-  casks: ["ghidra"],
+  // Homebrew currently provides Ghidra 12.2, but REA 6.8.0 accepts 12.1.x.
+  // Ghidra is therefore downloaded and built separately in INSTALL.md.
+  formulae: [
+    "gh",
+    "node",
+    "python@3.12",
+    "openjdk@21",
+    "ffmpeg",
+    "yt-dlp",
+    "uv",
+    "tesseract",
+    "unar",
+    "github-mcp-server",
+  ],
+  casks: [] as string[],
 }
 
 /** Global npm packages. */

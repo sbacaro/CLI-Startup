@@ -39,3 +39,13 @@ test("the policy names every tool and the credential rule", () => {
   assert.match(UPDATE_POLICY, /startup_update/)
   assert.match(UPDATE_POLICY, /never in a repository/i)
 })
+
+test("the policy forbids hand-written registrations and hardcoded toolchains", () => {
+  // Both were the cause of the broken first run, so the rule has to travel with
+  // the plugin rather than living in a README.
+  assert.match(UPDATE_POLICY, /rea setup/)
+  assert.match(UPDATE_POLICY, /brew --prefix/)
+  assert.match(UPDATE_POLICY, /empty value/i)
+  assert.match(UPDATE_POLICY, /gh.*token|token.*gh/i)
+  assert.match(UPDATE_POLICY, /never place a token/i)
+})

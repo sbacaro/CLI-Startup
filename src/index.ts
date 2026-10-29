@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin"
 import type { Context } from "@opencode/plugin/promise/plugin"
 import { spawnSync } from "node:child_process"
+import { readdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 
 import { CatalogCache } from "./cache.ts"
@@ -12,6 +13,7 @@ import { planInstall, type Environment } from "./planner.ts"
 import { UPDATE_POLICY, describeStatus, type ComponentStatus } from "./policy.ts"
 import { toModelInfo, toProviderInfo } from "./provision.ts"
 import type { MergedModel } from "./resolve.ts"
+import { resolveToolchain, toolchainEnvironment, type Probe } from "./toolchain.ts"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -30,6 +32,36 @@ const environment: Environment = {
   exists: (path) => {
     const result = runCommandSync(`test -e "${expandHome(path, homedir())}"`)
     return result === 0
+  },
+}
+
+/** Short, side-effect-free probes for the local toolchain. */
+const toolProbe: Probe = {
+  run: (command) => {
+    const result = spawnSync(process.env.SHELL || "/bin/sh", ["-lc", command], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    return { code: result.status ?? 1, stdout: result.stdout ?? "" }
+  },
+  exists: (path) => {
+    return spawnSync(process.env.SHELL || "/bin/sh", ["-c", `test -e "${path}"`], {
+      stdio: "ignore",
+    }).status === 0
+  },
+  read: (path) => {
+    try {
+      return readFileSync(path, "utf8")
+    } catch {
+      return undefined
+    }
+  },
+  list: (path) => {
+    try {
+      return readdirSync(path)
+    } catch {
+      return []
+    }
   },
 }
 
@@ -62,6 +94,27 @@ async function resolveApiKey(ctx: Context, spec: ProviderSpec): Promise<string |
     if (fromEnv) return fromEnv
   }
   return undefined
+}
+
+/**
+ * The environment handed to REA and the other local servers.
+ *
+ * The process environment is not enough: an exported `JAVA_HOME=""` makes REA
+ * reject every start, and a stale Ghidra path survives a reinstall. The
+ * resolver fills both from what is currently on disk.
+ */
+function localEnvironment(): NodeJS.ProcessEnv {
+  const toolchain = resolveToolchain(process.env, toolProbe)
+  const resolved = toolchainEnvironment(toolchain)
+  const env: NodeJS.ProcessEnv = { ...process.env }
+
+  if (resolved.JAVA_HOME) env.JAVA_HOME = resolved.JAVA_HOME
+  else delete env.JAVA_HOME
+
+  if (resolved.GHIDRA_INSTALL_DIR) env.GHIDRA_INSTALL_DIR = resolved.GHIDRA_INSTALL_DIR
+  else delete env.GHIDRA_INSTALL_DIR
+
+  return env
 }
 
 type ProviderState = {
@@ -117,9 +170,10 @@ export default Plugin.define({
     // MCP servers are declared as data, so re-provisioning is idempotent and a
     // server the user configured by hand is left untouched.
     await ctx.mcp.transform((editor) => {
+      const env = localEnvironment()
       for (const mcp of mcps) {
         if (editor.get(mcp.id)) continue
-        editor.set(mcp.id, mcp.config(process.env) as never)
+        editor.set(mcp.id, mcp.config(env) as never)
       }
     })
 
@@ -200,7 +254,7 @@ export default Plugin.define({
               installed: plan.missing.includes(mcp.id) ? undefined : "present",
               available: undefined,
               state: plan.missing.includes(mcp.id) ? ("missing" as const) : ("current" as const),
-              action: mcp.update ?? mcp.install,
+              action: mcp.setup ?? mcp.update ?? mcp.install,
             })),
             ...skills.map((skill) => ({
               id: skill.id,
@@ -230,15 +284,17 @@ export default Plugin.define({
           const { dryRun } = (input ?? {}) as { dryRun?: boolean }
           const plan = await planInstall(mcps, skills, environment)
 
-          if (plan.install.length === 0) {
+          if (plan.install.length === 0 && plan.setup.length === 0) {
             return { content: "Everything is already provisioned." }
           }
           if (dryRun) {
-            return { content: plan.install.map((cmd) => `would run: ${cmd}`).join("\n") }
+            return {
+              content: [...plan.install, ...plan.setup].map((cmd) => `would run: ${cmd}`).join("\n"),
+            }
           }
 
           const lines: string[] = []
-          for (const command of plan.install) {
+          for (const command of [...plan.install, ...plan.setup]) {
             await context.progress({ status: command })
             const result = await runCommand(command, { signal: context.signal })
             const tail = `${result.stdout}${result.stderr}`.trim().split("\n").slice(-2).join("\n")

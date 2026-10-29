@@ -16,13 +16,28 @@ runtime, so the configuration file stays almost empty:
 
 | Server | Type | Registered as |
 | --- | --- | --- |
-| REA | local | `rea mcp`, Ghidra paths read from the environment |
+| REA | local | `rea mcp`, registered by `rea setup --client opencode` |
 | Supabase | remote | `https://mcp.supabase.com/mcp` (OAuth) |
 | Cloudflare | remote | `https://mcp.cloudflare.com/mcp` (OAuth) |
-| Graphify | local | `graphify-mcp`, the package's dedicated MCP entrypoint |
+| Graphify | local | `graphify-mcp`, installed with the `graphifyy[mcp]` extra |
+| GitHub | local | `github-mcp-server stdio`, token read from `gh auth token` at launch |
 
 Registration goes through `ctx.mcp.transform`, so a server the user configured by
 hand is left alone and re-running is a no-op.
+
+Two servers own their own registration. REA's `rea setup` writes its OpenCode
+entry and installs the matching workflow, and Graphify's `graphify install`
+writes its skill. The plugin runs those commands instead of writing an entry by
+hand, because a hand-written entry leaves the workflow files missing. Ghidra and
+Java are resolved from Homebrew and from the JDK the installed Ghidra declares,
+never from a hardcoded path.
+
+The GitHub server is local and its command resolves the token itself:
+`GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token)" exec github-mcp-server stdio`.
+The token therefore never appears in any server configuration, and a rotated
+token takes effect on the next launch. Its toolsets are limited to
+`context`, `repos`, `issues`, `pull_requests`, and `actions`, because the full
+catalog is large enough to consume a useful part of the context window.
 
 ### Skills
 
@@ -68,7 +83,8 @@ a manual pre-step.
 
 ## Install
 
-See [INSTALL.md](INSTALL.md). It is written for an agent to follow step by step.
+See [INSTALL.md](INSTALL.md). It is a numbered list of copy-and-paste commands,
+written for someone who does not code: no editing files, no reading logs.
 
 ## Develop
 
@@ -82,6 +98,7 @@ src/
   index.ts       plugin entry: transforms, hook, tools
   manifest.ts    desired state: MCPs, skills, providers
   planner.ts     decides what is missing and what would fix it
+  toolchain.ts   finds Ghidra and the JDK REA needs, from what is installed
   exec.ts        shell execution and path expansion
   discovery.ts   gateway /v1/models
   catalog.ts     models.dev fetch, cache, and merge

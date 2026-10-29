@@ -32,3 +32,13 @@ test("captures stderr", async () => {
   assert.equal(result.code, 1)
   assert.equal(result.stderr, "oops")
 })
+
+test("a command killed by its timeout reports code 124", async () => {
+  const started = Date.now()
+  const result = await runCommand("sleep 5", { timeoutMs: 50 })
+
+  assert.equal(result.code, 124)
+  assert.match(result.stderr, /timed out/)
+  // A timeout must return promptly instead of waiting for the full command.
+  assert.ok(Date.now() - started < 1_000)
+})

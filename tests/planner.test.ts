@@ -15,11 +15,17 @@ function env(overrides: Partial<Environment> = {}): Environment {
 test("an already provisioned machine produces no install commands", async () => {
   const plan = await planInstall(mcps, skills, env())
   assert.deepEqual(plan.install, [])
+  assert.deepEqual(plan.setup, [])
 })
 
 test("a missing local MCP prerequisite schedules its installer", async () => {
-  const plan = await planInstall(mcps, skills, env({ hasCommand: async (c) => c !== "rea" }))
+  const plan = await planInstall(
+    mcps,
+    [],
+    env({ hasCommand: async (c) => c !== "rea", exists: () => false }),
+  )
   assert.ok(plan.install.some((cmd) => cmd.includes("npm install -g rea-agents")))
+  assert.ok(plan.setup.includes("rea setup --client opencode --skill --yes"))
 })
 
 test("a missing skill schedules its installer", async () => {

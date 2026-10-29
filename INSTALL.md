@@ -1,113 +1,260 @@
-# Configure OpenCode
+# Instalar o OpenCode
 
-Instructions for an agent. Follow them in order, run each command, and stop if a
-step fails. Every step is safe to re-run.
+Para quem **não programa**. Cada passo é um bloco de comando: copie o bloco
+inteiro, cole no Terminal e aperte Enter. Espere terminar antes de ir ao
+próximo. Se um passo mostrar erro em vermelho, pare e mande a mensagem para
+quem te passou este guia.
 
-Target: macOS on Apple silicon. Homebrew installs to `/opt/homebrew`.
+Você vai precisar de: macOS, internet, e sua conta do GitHub.
 
-## 1. Install the command-line foundation
+## 1. Abrir o Terminal
+
+Aperte `Command` + `Espaço`, digite `Terminal` e aperte Enter.
+
+## 2. Instalar o Homebrew
+
+Cole e espere. Pede a senha do seu Mac (não aparece nada enquanto digita) e
+depois aperte Enter. Pode demorar alguns minutos.
 
 ```sh
-command -v brew >/dev/null || /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Depois cole este bloco, que deixa o Homebrew disponível agora e nas próximas
+vezes:
+
+```sh
+grep -q 'brew shellenv' ~/.zprofile 2>/dev/null || echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
 eval "$(/opt/homebrew/bin/brew shellenv)"
+brew --version
 ```
+
+Deve aparecer algo como `Homebrew 4.x.x`.
+
+## 3. Entrar na sua conta do GitHub
+
+Primeiro instale o programa do GitHub:
 
 ```sh
-brew install gh node openjdk@21 ffmpeg yt-dlp uv tesseract unar
-brew install --cask ghidra
+brew install gh
 ```
 
-`ghidra` is only needed by REA. Skip it if reverse engineering is not wanted.
-
-## 2. Export the Ghidra paths
-
-REA validates that its paths are absolute and refuses to start otherwise. Export
-them so the plugin can pass them through:
+Agora entre na conta:
 
 ```sh
-export GHIDRA_INSTALL_DIR="$HOME/Library/ghidra_12.1.4_PUBLIC"
-export JAVA_HOME="$(/usr/libexec/java_home -v 21)"
+gh auth login --hostname github.com --git-protocol https --web
 ```
 
-Add both lines to `~/.zshrc` so they survive a new shell.
+Ele vai fazer perguntas. Aperte Enter para aceitar o que já vem marcado e
+escolha **Login with a web browser**. Copie o código de 8 letras que aparecer,
+aperte Enter, cole o código no navegador e autorize.
 
-## 3. Install the agent CLIs
+No fim deve aparecer `✓ Logged in to github.com`. Se não aparecer, rode o
+comando de novo.
+
+## 4. Instalar os programas base
+
+Cole e espere. Demora alguns minutos.
+
+```sh
+brew install node python@3.12 openjdk@21 uv ffmpeg yt-dlp tesseract unar github-mcp-server
+```
+
+## 5. Instalar o OpenCode
 
 ```sh
 npm install -g @opencode/cli
 ```
 
-## 4. Install the startup plugin
+## 6. Instalar este plugin
 
 ```sh
 opencode plugin add github:sbacaro/CLI-Startup
 ```
 
-Confirm it registered:
+Confira se apareceu na lista:
 
 ```sh
 opencode plugin list
 ```
 
-## 5. Provision the rest from inside OpenCode
+Deve aparecer uma linha começando com `opencode-startup`.
 
-Open OpenCode in any directory and ask the agent to run `startup_provision`. It
-installs whatever is missing, using each project's own installer:
+## 7. Instalar o que falta
 
-- `rea-agents` via npm, when the `rea` binary is absent
-- `graphifyy` via `uv tool install`, when `graphify-mcp` is absent
-- `superpowers`, `ui-ux-pro-max`, `design-motion-principles` when their files are absent
+Abra o OpenCode:
 
-To see what would happen first, ask for `startup_status`, or call
-`startup_provision` with `dryRun` set to true.
+```sh
+opencode
+```
 
-## 6. Add provider credentials
+Já dentro dele, peça em português mesmo:
+
+```text
+Instale tudo que estiver faltando (startup_provision)
+```
+
+E aperte Enter. Ele instala o resto sozinho, usando o instalador oficial de
+cada ferramenta. Pode pedir permissão: aceite.
+
+Quando terminar, peça:
+
+```text
+Mostre o status da instalação (startup_status)
+```
+
+Tudo deve aparecer como `current`. Se algo aparecer como `missing`, rode
+`startup_provision` de novo.
+
+## 8. Colocar sua chave dos modelos
+
+Ainda dentro do OpenCode, digite:
 
 ```text
 /connect
 ```
 
-Choose **Kodeo**, paste the key, confirm. Repeat for **Globant**. Model lists
-appear as soon as a key is accepted; no restart and no configuration edit.
+Escolha **Kodeo**, cole a chave e confirme. Repita para **Globant** se você
+tiver a chave dele. A lista de modelos aparece sozinha.
 
-Skipping a provider leaves it with no models. Nothing else breaks.
+## 9. Entrar nos serviços que pedem login no navegador
 
-## 7. Authenticate the remote MCP servers
+Digite:
 
-Supabase and Cloudflare use OAuth. Run `/mcps`, select each server, and sign in.
+```text
+/mcps
+```
 
-REA connects without authentication once step 2 is done. Graphify starts once a
-graph exists for the project (run `/graphify .` in your assistant).
+Escolha **supabase** e faça login. Depois escolha **cloudflare** e faça login.
 
-## 8. Verify
+## 10. Conferir se está tudo certo
+
+Saia do OpenCode (`Ctrl` + `C` duas vezes) e rode:
 
 ```sh
 opencode mcp list
 ```
 
-Then, inside OpenCode, run `startup_status`.
+Deve aparecer `connected` em: `github`, `graphify`, `rea`, `supabase` e
+`cloudflare`. Se algum disser `needs authentication`, faça o passo 9 dele.
 
-## Updating later
+---
 
-- OpenCode updates itself when `update` is `"auto"`.
-- The plugin is a git spec, so it refreshes on restart.
-- Ask for `startup_update` to pull each component's latest release.
+# Opcional: engenharia reversa (REA + Ghidra)
 
-## Notes
+Só faça isto se você vai analisar programas, apps ou binários. O REA também
+funciona sem Ghidra para JavaScript, .NET e aplicativos de desktop, então pule
+esta parte se não precisar.
 
-`ui-ux-pro-max-cli` writes to `./.opencode/skills`, which is project-scoped. Its
-`--global` flag targets `~/.opencode/skills`, a directory OpenCode does not scan,
-so the plugin never passes it.
+## 11. Instalar o REA
 
-## Troubleshooting
+```sh
+npm install -g rea-agents
+```
 
-**A provider shows no models.** No credential yet. Run `/connect`.
+## 12. Baixar e preparar o Ghidra
 
-**`rea` fails with "must be absolute".** `GHIDRA_INSTALL_DIR` or `JAVA_HOME` is
-unset. Redo step 2.
+O Homebrew instala a versão 12.2 do Ghidra, que o REA **não** aceita. Este bloco
+baixa a 12.1.4 correta, compila o componente que falta no Mac com chip Apple e
+confere tudo. Cole o bloco inteiro e espere; leva alguns minutos.
 
-**`graphify` fails to start.** No graph has been built for this project yet.
-Run `/graphify .` in your assistant, then reload.
+Primeiro, instale as ferramentas de compilação da Apple (pode abrir uma janela
+pedindo para instalar; aceite e espere terminar):
 
-**A model shows no cost.** It has no entry in models.dev, typically a
-gateway-internal alias. Limits still come from the gateway.
+```sh
+xcode-select -p >/dev/null 2>&1 || xcode-select --install
+```
+
+Agora o Ghidra:
+
+```sh
+curl -fL "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip" -o "$HOME/Downloads/ghidra_12.1.4_PUBLIC.zip" && unzip -q -o "$HOME/Downloads/ghidra_12.1.4_PUBLIC.zip" -d "$HOME/Library" && cd "$HOME/Library/ghidra_12.1.4_PUBLIC/Ghidra/Features/Decompiler/src/decompile/cpp" && make ghidra_opt ARCH_TYPE="-arch arm64" OSDIR=mac_arm_64 && mkdir -p "$HOME/Library/ghidra_12.1.4_PUBLIC/Ghidra/Features/Decompiler/os/mac_arm_64" && install -m 755 ghidra_opt "$HOME/Library/ghidra_12.1.4_PUBLIC/Ghidra/Features/Decompiler/os/mac_arm_64/decompile" && echo "Ghidra pronto"
+```
+
+No fim deve aparecer `Ghidra pronto`.
+
+## 13. Apontar o REA para o Ghidra
+
+```sh
+grep -q GHIDRA_INSTALL_DIR ~/.zshrc 2>/dev/null || printf 'export GHIDRA_INSTALL_DIR="$HOME/Library/ghidra_12.1.4_PUBLIC"\nexport JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"\n' >> ~/.zshrc
+```
+
+Feche o Terminal, abra de novo e confira:
+
+```sh
+rea doctor --provider ghidra --json
+```
+
+Deve começar com `"healthy":true`.
+
+## 14. Registrar o REA no OpenCode
+
+```sh
+rea setup --client opencode --skill --yes
+```
+
+Depois abra o OpenCode e rode `startup_status` de novo. O `rea` deve aparecer
+como `current`.
+
+## 15. Instalar o Graphify (opcional)
+
+Só se você quiser mapas de código. Cole:
+
+```sh
+uv tool install "graphifyy[mcp]" && graphify install --platform opencode && graphify-mcp --help
+```
+
+---
+
+# Se algo deu errado
+
+Cada comando abaixo desfaz uma parte. Nenhum apaga seus arquivos pessoais nem
+suas chaves.
+
+Remover o REA:
+
+```sh
+rea uninstall
+```
+
+Remover o Graphify:
+
+```sh
+graphify uninstall
+```
+
+Remover o Ghidra e o Java:
+
+```sh
+rm -rf "$HOME/Library/ghidra_12.1.4_PUBLIC" && brew uninstall openjdk@21
+```
+
+Para remover as duas linhas que apontam para eles, rode:
+
+```sh
+sed -i '' '/GHIDRA_INSTALL_DIR/d;/^export JAVA_HOME=/d' ~/.zshrc
+```
+
+Remover o plugin:
+
+```sh
+opencode plugin remove opencode-startup
+```
+
+## Problemas comuns
+
+**`rea` diz `JAVA_HOME must be absolute`.** O `JAVA_HOME` está vazio. Rode o
+passo 13 de novo, feche e abra o Terminal.
+
+**`rea` diz `executable_missing` para Ghidra.** O Ghidra foi apagado ou movido.
+Rode os passos 12 e 13 de novo.
+
+**`graphify` diz `No module named 'mcp'`.** Foi instalado sem o complemento.
+Rode o passo 15 de novo.
+
+**GitHub responde `401`.** Sua conta do GitHub saiu do ar. Rode
+`gh auth login --hostname github.com --git-protocol https --web` e reinicie o
+OpenCode.
+
+**Um modelo aparece sem preço.** Ele não está no catálogo público. O limite de
+uso continua correto.

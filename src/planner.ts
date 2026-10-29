@@ -19,6 +19,8 @@ export type Environment = {
 export type InstallPlan = {
   /** Commands to run, in a stable order. */
   install: string[]
+  /** Component setup commands, after prerequisites have been installed. */
+  setup: string[]
   /** Component ids that are not yet provisioned. */
   missing: string[]
 }
@@ -29,23 +31,28 @@ export function commandName(command: string): string {
   return first
 }
 
-async function mcpMissing(mcp: McpSpec, env: Environment, processEnv: NodeJS.ProcessEnv): Promise<boolean> {
+async function mcpMissing(
+  mcp: McpSpec,
+  env: Environment,
+  processEnv: NodeJS.ProcessEnv,
+): Promise<{ prerequisite: boolean; setup: boolean }> {
   const config = mcp.config(processEnv)
-  if (config.type !== "local") return false
-  if (!mcp.install) return false
+  if (config.type !== "local") return { prerequisite: false, setup: false }
+
+  let prerequisite = false
 
   // The declared command is what OpenCode will spawn; if it does not resolve,
   // the server cannot start no matter what the installer claims.
   const declared = config.command
   if (Array.isArray(declared) && typeof declared[0] === "string") {
-    if (!(await env.hasCommand(declared[0]))) return true
+    if (!(await env.hasCommand(declared[0]))) prerequisite = true
   }
 
-  if (mcp.verify) {
-    return !(await env.hasCommand(commandName(mcp.verify.command)))
-  }
+  if (mcp.verify && !(await env.hasCommand(commandName(mcp.verify.command)))) prerequisite = true
 
-  return false
+  const setup = mcp.setupMarkers?.some((marker) => !env.exists(marker)) ?? false
+
+  return { prerequisite, setup }
 }
 
 function skillMissing(skill: SkillSpec, env: Environment): boolean {
@@ -65,12 +72,15 @@ export async function planInstall(
   processEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<InstallPlan> {
   const install: string[] = []
+  const setup: string[] = []
   const missing: string[] = []
 
   for (const mcp of mcps) {
-    if (await mcpMissing(mcp, env, processEnv)) {
+    const state = await mcpMissing(mcp, env, processEnv)
+    if (state.prerequisite || state.setup) {
       missing.push(mcp.id)
-      if (mcp.install) install.push(mcp.install)
+      if (state.prerequisite && mcp.install) install.push(mcp.install)
+      if (state.setup && mcp.setup) setup.push(mcp.setup)
     }
   }
 
@@ -81,5 +91,5 @@ export async function planInstall(
     }
   }
 
-  return { install, missing }
+  return { install, setup, missing }
 }
