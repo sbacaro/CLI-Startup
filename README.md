@@ -17,6 +17,8 @@ runtime, so the configuration file stays almost empty:
 | Model catalogs | Discovered from each gateway's `/v1/models`, priced from models.dev |
 | Credentials | Added in the OpenCode UI via `/connect`; never stored in this repo |
 | Update policy | Injected into every model call through a `session.hook("context")` |
+| Component status | `startup_status` probes the installed binaries and skill markers |
+| Component updates | `startup_update` executes the original upstream installer commands |
 | Third-party skills | Installed by their own upstream installers; never vendored |
 
 The result is one line in `opencode.json`:

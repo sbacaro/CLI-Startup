@@ -19,6 +19,9 @@ brew install gh node openjdk@21 ffmpeg yt-dlp uv swiftformat swiftlint xcodegen 
 brew install --cask ghidra
 ```
 
+Graphify is installed from its official PyPI package in step 5; it is not a
+Homebrew package.
+
 `ghidra` is only needed by REA. Skip it if reverse engineering is not wanted, and
 skip step 5.
 
@@ -89,6 +92,19 @@ Register REA with OpenCode so its MCP server and skill are wired up:
 ```sh
 rea setup --client opencode --yes
 ```
+
+Install Graphify from its official PyPI package and register its OpenCode skill
+and project hook:
+
+```sh
+uv tool install graphifyy
+graphify install --platform opencode
+```
+
+The package name is intentionally `graphifyy` (with two `y` characters); the
+installed CLI remains `graphify`. The global OpenCode skill is written to
+`~/.config/opencode/skills/graphify/`, and Graphify writes its project hook under
+`.opencode/plugins/` when run from a project.
 
 ## 6. Verify
 

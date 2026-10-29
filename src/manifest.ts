@@ -81,6 +81,15 @@ export const skills: UpstreamSkill[] = [
     markers: [],
     versionCommand: "rea",
   },
+  {
+    id: "graphify",
+    name: "Graphify",
+    repository: "https://github.com/Graphify-Labs/graphify",
+    install: "uv tool install graphifyy && graphify install --platform opencode",
+    update: "uv tool upgrade graphifyy && graphify install --platform opencode",
+    markers: ["~/.config/opencode/skills/graphify/SKILL.md"],
+    versionCommand: "graphify",
+  },
 ]
 
 /** Homebrew formulae and casks the machine needs before the plugin is useful. */

@@ -3,7 +3,9 @@ import type { Context } from "@opencode/plugin/promise/plugin"
 
 import { CatalogCache } from "./cache.ts"
 import { buildProviderModels, loadCatalog } from "./catalog.ts"
+import { probeAll } from "./components.ts"
 import { discoverModels, type DiscoveredModel } from "./discovery.ts"
+import { runCommand } from "./exec.ts"
 import { providers, skills, type ProviderSpec } from "./manifest.ts"
 import { UPDATE_POLICY, describeStatus, type ComponentStatus } from "./policy.ts"
 import { toModelInfo, toProviderInfo } from "./provision.ts"
@@ -167,13 +169,7 @@ export default Plugin.define({
         input: { type: "object", additionalProperties: false },
         options: { namespace: "startup", codemode: true },
         execute: async () => {
-          const components: ComponentStatus[] = skills.map((skill) => ({
-            id: skill.id,
-            installed: undefined,
-            available: undefined,
-            state: "unknown" as const,
-            action: skill.update,
-          }))
+          const components = await probeAll(skills)
           return { content: describeStatus(components) }
         },
       })
@@ -191,7 +187,7 @@ export default Plugin.define({
           additionalProperties: false,
         },
         options: { namespace: "startup", codemode: true },
-        execute: async (input) => {
+        execute: async (input, context) => {
           const { component } = input as { component: string }
           const targets = component === "all" ? skills : skills.filter((s) => s.id === component)
 
@@ -201,7 +197,18 @@ export default Plugin.define({
             }
           }
 
-          return { content: targets.map((s) => `${s.id}: ${s.update}`).join("\n") }
+          // Each installer is the upstream project's own command, run verbatim.
+          // A failure on one component must not stop the others.
+          const lines: string[] = []
+          for (const target of targets) {
+            await context.progress({ status: `updating ${target.id}` })
+            const result = await runCommand(target.update, { signal: context.signal })
+            const tail = `${result.stdout}${result.stderr}`.trim().split("\n").slice(-3).join("\n")
+            lines.push(`${target.id}: ${result.code === 0 ? "ok" : `failed (${result.code})`}`)
+            if (tail) lines.push(tail)
+          }
+
+          return { content: lines.join("\n") }
         },
       })
     })
