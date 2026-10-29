@@ -1,0 +1,44 @@
+{
+  "name": "opencode-startup",
+  "version": "0.1.0",
+  "description": "Provision OpenCode from a single command: providers, MCP servers, and a standing update policy applied at runtime.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sbacaro/CLI-Startup.git"
+  },
+  "homepage": "https://github.com/sbacaro/CLI-Startup#readme",
+  "bugs": {
+    "url": "https://github.com/sbacaro/CLI-Startup/issues"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "bootstrap",
+    "provisioning"
+  ],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "INSTALL.md",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "check": "tsc --noEmit",
+    "verify": "npm run check && npm test"
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
