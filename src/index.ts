@@ -8,8 +8,15 @@ import { CatalogCache } from "./cache.ts"
 import { buildProviderModels, loadCatalog } from "./catalog.ts"
 import { discoverModels, type DiscoveredModel } from "./discovery.ts"
 import { expandHome, runCommand } from "./exec.ts"
-import { mcps, providers, skills, type ProviderSpec } from "./manifest.ts"
+import { commandFor, mcps, providers, skills, type ProviderSpec } from "./manifest.ts"
 import { planInstall, type Environment } from "./planner.ts"
+import {
+  commandExists,
+  hostPlatform,
+  pathExists,
+  shellFor,
+  type PlatformID,
+} from "./platform.ts"
 import { UPDATE_POLICY, describeStatus, type ComponentStatus } from "./policy.ts"
 import { toModelInfo, toProviderInfo } from "./provision.ts"
 import type { MergedModel } from "./resolve.ts"
@@ -17,38 +24,41 @@ import { resolveToolchain, toolchainEnvironment, type Probe } from "./toolchain.
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
+const platform: PlatformID = hostPlatform()
+
 type Registration = { dispose(): Promise<void> }
 
 function discoveryKey(providerID: string): string {
   return `discovery/${providerID}`
 }
 
-/** The real machine, as the planner sees it. */
+/**
+ * The real machine, as the planner sees it.
+ *
+ * Both probes are filesystem questions answered in-process. Running `which` or
+ * `test -e` would only work on a POSIX host, and would make the planner depend
+ * on a shell it is not otherwise allowed to assume.
+ */
 const environment: Environment = {
-  hasCommand: async (command) => {
-    const result = await runCommand(`command -v ${command}`, { timeoutMs: 15_000 })
-    return result.code === 0 && result.stdout.trim().length > 0
-  },
-  exists: (path) => {
-    const result = runCommandSync(`test -e "${expandHome(path, homedir())}"`)
-    return result === 0
-  },
+  hasCommand: async (command) => commandExists(platform, command, process.env, pathExists),
+  exists: (path) => pathExists(expandHome(path, homedir())),
 }
 
 /** Short, side-effect-free probes for the local toolchain. */
 const toolProbe: Probe = {
   run: (command) => {
-    const result = spawnSync(process.env.SHELL || "/bin/sh", ["-lc", command], {
+    // The same shell `runCommand` uses, for the same reason: on macOS `brew`
+    // lives in a prefix that only a login shell has on PATH, and on Windows the
+    // probe has to go through an interpreter that understands the command.
+    const shell = shellFor(platform, process.env, (name) => commandExists(platform, name, process.env, pathExists))
+    const result = spawnSync(shell.executable, shell.args(command), {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     })
     return { code: result.status ?? 1, stdout: result.stdout ?? "" }
   },
-  exists: (path) => {
-    return spawnSync(process.env.SHELL || "/bin/sh", ["-c", `test -e "${path}"`], {
-      stdio: "ignore",
-    }).status === 0
-  },
+  exists: (path) => pathExists(path),
   read: (path) => {
     try {
       return readFileSync(path, "utf8")
@@ -63,12 +73,6 @@ const toolProbe: Probe = {
       return []
     }
   },
-}
-
-function runCommandSync(command: string): number {
-  // A synchronous existence check keeps the planner interface simple; `test`
-  // returns immediately and never blocks on I/O of any size.
-  return spawnSync(process.env.SHELL || "/bin/sh", ["-c", command], { stdio: "ignore" }).status ?? 1
 }
 
 /**
@@ -104,7 +108,7 @@ async function resolveApiKey(ctx: Context, spec: ProviderSpec): Promise<string |
  * resolver fills both from what is currently on disk.
  */
 function localEnvironment(): NodeJS.ProcessEnv {
-  const toolchain = resolveToolchain(process.env, toolProbe)
+  const toolchain = resolveToolchain(process.env, toolProbe, platform)
   const resolved = toolchainEnvironment(toolchain)
   const env: NodeJS.ProcessEnv = { ...process.env }
 
@@ -173,7 +177,7 @@ export default Plugin.define({
       const env = localEnvironment()
       for (const mcp of mcps) {
         if (editor.get(mcp.id)) continue
-        editor.set(mcp.id, mcp.config(env) as never)
+        editor.set(mcp.id, mcp.config(env, platform) as never)
       }
     })
 
@@ -247,21 +251,21 @@ export default Plugin.define({
         input: { type: "object", additionalProperties: false },
         options: { namespace: "startup", codemode: true },
         execute: async () => {
-          const plan = await planInstall(mcps, skills, environment)
+          const plan = await planInstall(mcps, skills, environment, process.env, platform)
           const components: ComponentStatus[] = [
             ...mcps.map((mcp) => ({
               id: mcp.id,
               installed: plan.missing.includes(mcp.id) ? undefined : "present",
               available: undefined,
               state: plan.missing.includes(mcp.id) ? ("missing" as const) : ("current" as const),
-              action: mcp.setup ?? mcp.update ?? mcp.install,
+              action: commandFor(mcp.setup ?? mcp.update ?? mcp.install ?? "", platform),
             })),
             ...skills.map((skill) => ({
               id: skill.id,
               installed: plan.missing.includes(skill.id) ? undefined : "present",
               available: undefined,
               state: plan.missing.includes(skill.id) ? ("missing" as const) : ("current" as const),
-              action: skill.update,
+              action: commandFor(skill.update, platform),
             })),
           ]
           return { content: describeStatus(components) }
@@ -282,7 +286,7 @@ export default Plugin.define({
         options: { namespace: "startup", codemode: true },
         execute: async (input, context) => {
           const { dryRun } = (input ?? {}) as { dryRun?: boolean }
-          const plan = await planInstall(mcps, skills, environment)
+          const plan = await planInstall(mcps, skills, environment, process.env, platform)
 
           if (plan.install.length === 0 && plan.setup.length === 0) {
             return { content: "Everything is already provisioned." }
@@ -296,8 +300,8 @@ export default Plugin.define({
           const lines: string[] = []
           for (const command of [...plan.install, ...plan.setup]) {
             await context.progress({ status: command })
-            const result = await runCommand(command, { signal: context.signal })
-            const tail = `${result.stdout}${result.stderr}`.trim().split("\n").slice(-2).join("\n")
+            const result = await runCommand(command, { signal: context.signal, platform })
+            const tail = `${result.stdout}${result.stderr}`.trim().split(/\r?\n/).slice(-2).join("\n")
             lines.push(`${result.code === 0 ? "ok  " : `fail`} ${command}`)
             if (result.code !== 0 && tail) lines.push(tail)
           }
@@ -323,9 +327,11 @@ export default Plugin.define({
         execute: async (input, context) => {
           const { component } = input as { component: string }
           const targets = [
-            ...mcps.filter((m) => m.update).map((m) => ({ id: m.id, update: m.update! })),
-            ...skills.map((s) => ({ id: s.id, update: s.update })),
-          ].filter((t) => component === "all" || t.id === component)
+            ...mcps.map((m) => ({ id: m.id, update: commandFor(m.update ?? "", platform) })),
+            ...skills.map((s) => ({ id: s.id, update: commandFor(s.update, platform) })),
+          ]
+            .filter((t): t is { id: string; update: string } => Boolean(t.update))
+            .filter((t) => component === "all" || t.id === component)
 
           if (targets.length === 0) {
             const known = [...mcps.map((m) => m.id), ...skills.map((s) => s.id)]
@@ -335,7 +341,7 @@ export default Plugin.define({
           const lines: string[] = []
           for (const target of targets) {
             await context.progress({ status: `updating ${target.id}` })
-            const result = await runCommand(target.update, { signal: context.signal })
+            const result = await runCommand(target.update, { signal: context.signal, platform })
             lines.push(`${target.id}: ${result.code === 0 ? "ok" : `failed (${result.code})`}`)
           }
           return { content: lines.join("\n") }

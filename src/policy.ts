@@ -25,7 +25,8 @@ This OpenCode is provisioned by the \`opencode-startup\` plugin. Keep it current
   owns its registration and workflow files. Run that command instead of writing
   an MCP entry by hand: a hand-written entry leaves the matching skill missing.
 - Ghidra and Java are prerequisites, not dependencies of the MCP server. Never
-  hardcode their paths: resolve them from \`brew --prefix\` and from the JDK the
+  hardcode their paths: resolve them from what is installed — \`brew --prefix\` on
+  macOS, \`%ProgramFiles%\` and \`where javac\` on Windows — and from the JDK the
   installed Ghidra declares, and omit \`JAVA_HOME\` entirely when it cannot be
   resolved. An empty value makes REA refuse to start.
 - The GitHub MCP resolves its token inside its own command line, from

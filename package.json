@@ -27,7 +27,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test": "node --experimental-strip-types --test \"tests/*.test.ts\"",
     "check": "tsc --noEmit",
     "verify": "npm run check && npm test"
   },

@@ -7,6 +7,9 @@
  * the same truth instead of drifting apart.
  */
 
+import { commandLine, hostPlatform, type PlatformID } from "./platform.ts"
+import { githubMcpCommand, installGithubMcp, updateGithubMcp } from "./installers.ts"
+
 /** A model provider the runtime should expose. */
 export type ProviderSpec = {
   id: string
@@ -36,6 +39,20 @@ export const providers: ProviderSpec[] = [
 ]
 
 /**
+ * A command, or a different command per platform.
+ *
+ * Most installers are the same everywhere; the ones that are not (a Homebrew
+ * formula that has no Windows package) say so here instead of leaving a command
+ * that silently cannot succeed. Returning `undefined` means "nothing to run
+ * here", so a platform without a supported installer stays out of the plan.
+ */
+export type PlatformCommand = string | ((platform: PlatformID) => string | undefined)
+
+export function commandFor(command: PlatformCommand, platform: PlatformID = hostPlatform()): string | undefined {
+  return typeof command === "function" ? command(platform) : command
+}
+
+/**
  * An MCP server the runtime should connect.
  *
  * `install` covers anything that must exist on disk first; `config` is the
@@ -48,14 +65,14 @@ export type McpSpec = {
   /** Upstream project that owns this server. */
   repository: string
   /** Command that installs prerequisites, or undefined when none are needed. */
-  install?: string
+  install?: PlatformCommand
   /** Command that refreshes the prerequisites. */
-  update?: string
+  update?: PlatformCommand
   /**
    * Upstream command that registers the server with OpenCode and installs its
    * matching workflow, when the project owns that integration.
    */
-  setup?: string
+  setup?: PlatformCommand
   /** Files that prove an upstream setup command has been applied. */
   setupMarkers?: string[]
   /** How to verify the prerequisites are present. */
@@ -67,8 +84,11 @@ export type McpSpec = {
    * that is unset must be omitted entirely. Passing `{env:NAME}` through
    * verbatim would send an empty string, and servers that validate their paths
    * reject that at startup.
+   *
+   * The platform decides how a command line that reads a credential is spelled:
+   * `sh -c` on POSIX, PowerShell on Windows.
    */
-  config(env: NodeJS.ProcessEnv): Record<string, unknown>
+  config(env: NodeJS.ProcessEnv, platform?: PlatformID): Record<string, unknown>
 }
 
 export const mcps: McpSpec[] = [
@@ -84,7 +104,7 @@ export const mcps: McpSpec[] = [
     setup: "rea setup --client opencode --skill --yes",
     setupMarkers: ["~/.config/opencode/opencode.json", "~/.agents/skills/reverse-engineer-anything/SKILL.md"],
     verify: { command: "rea --version" },
-    config: (env) => {
+    config: (env, platform = hostPlatform()) => {
       const environment: Record<string, string> = { JAVA_OPTS: "-Xmx8g" }
       // REA validates that both paths are absolute, so they are only passed
       // when actually set; an empty string is rejected outright.
@@ -94,7 +114,9 @@ export const mcps: McpSpec[] = [
 
       return {
         type: "local",
-        command: ["rea", "mcp"],
+        // `npm install -g` writes a `.cmd` shim, and Node cannot spawn one
+        // without going through a command interpreter.
+        command: commandLine(platform, "rea mcp"),
         disabled: false,
         timeout: { startup: 60_000, catalog: 60_000 },
         environment,
@@ -145,13 +167,19 @@ export const mcps: McpSpec[] = [
     id: "github",
     name: "GitHub",
     repository: "https://github.com/github/github-mcp-server",
-    // The token is resolved by the child process at startup, not by the plugin.
-    // The shell wrapper keeps the secret in the `gh` keychain and reads it
-    // fresh on every launch, so no credential enters this project's data and a
-    // rotated token takes effect on the next start.
-    config: () => ({
+    // Upstream ships a Homebrew formula for macOS and a zip of Windows binaries;
+    // there is no package-manager entry on Windows, so each platform's own
+    // installer lives in `installers.ts` rather than as a literal here.
+    install: installGithubMcp,
+    update: updateGithubMcp,
+    verify: { command: "github-mcp-server --help" },
+    config: (_env, platform = hostPlatform()) => ({
       type: "local",
-      command: ["sh", "-c", 'GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token)" exec github-mcp-server stdio'],
+      // The token is resolved by the child process at startup, not by the
+      // plugin, so no credential enters this project's data and a rotated token
+      // takes effect on the next start. The command is a shell wrapper on both
+      // platforms, so `verify` is what decides whether the server is installed.
+      command: githubMcpCommand(platform),
       disabled: false,
       timeout: { startup: 30_000, catalog: 60_000 },
       environment: {
@@ -209,6 +237,15 @@ export const skills: SkillSpec[] = [
   },
 ]
 
+/** A base package, named the way each package manager spells it. */
+export type BasePackages = {
+  /** The installer the guide tells the user to run. */
+  manager: "brew" | "winget"
+  packages: string[]
+  /** Packages the platform's manager cannot provide, explained in the guide. */
+  manual: string[]
+}
+
 /** Homebrew packages the machine needs before any of this works. */
 export const brewPackages = {
   // Homebrew currently provides Ghidra 12.2, but REA 6.8.0 accepts 12.1.x.
@@ -226,6 +263,37 @@ export const brewPackages = {
     "github-mcp-server",
   ],
   casks: [] as string[],
+}
+
+/**
+ * winget package ids for the same set.
+ *
+ * `github-mcp-server` and Ghidra have no winget package — upstream publishes a
+ * zip and a release archive — so they are listed as manual and installed from
+ * the release itself in `INSTALL-WINDOWS.md`.
+ */
+export const wingetPackages = {
+  formulae: [
+    "GitHub.cli",
+    "OpenJS.NodeJS.LTS",
+    "Python.Python.3.12",
+    "EclipseAdoptium.Temurin.21.JDK",
+    "Gyan.FFmpeg",
+    "yt-dlp.yt-dlp",
+    "astral-sh.uv",
+    "UB-Mannheim.TesseractOCR",
+    "7zip.7zip",
+  ],
+  // No winget manifest exists for either of these.
+  manual: ["github-mcp-server", "ghidra"],
+}
+
+/** The base packages the given platform's guide installs. */
+export function basePackages(platform: PlatformID = hostPlatform()): BasePackages {
+  if (platform === "win32") {
+    return { manager: "winget", packages: wingetPackages.formulae, manual: wingetPackages.manual }
+  }
+  return { manager: "brew", packages: brewPackages.formulae, manual: [] }
 }
 
 /** Global npm packages. */

@@ -29,15 +29,37 @@ Two servers own their own registration. REA's `rea setup` writes its OpenCode
 entry and installs the matching workflow, and Graphify's `graphify install`
 writes its skill. The plugin runs those commands instead of writing an entry by
 hand, because a hand-written entry leaves the workflow files missing. Ghidra and
-Java are resolved from Homebrew and from the JDK the installed Ghidra declares,
-never from a hardcoded path.
+Java are resolved from what is installed — Homebrew prefixes on macOS,
+`%ProgramFiles%` and `where javac` on Windows — and from the JDK the installed
+Ghidra declares, never from a hardcoded path.
 
 The GitHub server is local and its command resolves the token itself:
-`GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token)" exec github-mcp-server stdio`.
-The token therefore never appears in any server configuration, and a rotated
-token takes effect on the next launch. Its toolsets are limited to
-`context`, `repos`, `issues`, `pull_requests`, and `actions`, because the full
-catalog is large enough to consume a useful part of the context window.
+`GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token)" exec github-mcp-server stdio`
+on POSIX, the PowerShell equivalent on Windows. The token therefore never
+appears in any server configuration, and a rotated token takes effect on the
+next launch. Its toolsets are limited to `context`, `repos`, `issues`,
+`pull_requests`, and `actions`, because the full catalog is large enough to
+consume a useful part of the context window.
+
+## Platforms
+
+The plugin runs natively on macOS, Linux, and Windows. What differs is confined
+to `src/platform.ts` and `src/installers.ts`, so the rest of the code asks one
+question instead of branching on the host everywhere:
+
+| Concern | macOS / Linux | Windows |
+| --- | --- | --- |
+| Installer shell | login shell (`$SHELL -lc`) | PowerShell (`-NoProfile -Command`) |
+| PATH probe | `PATH`, `:` separated | `Path`, `;` separated, `PATHEXT` appended |
+| Absolute path | starts with `/` | drive letter or UNC root |
+| Ghidra search | `brew --prefix`, `~/Library/ghidra_*_PUBLIC` | `%ProgramFiles%`, `%USERPROFILE%` |
+| JDK search | `brew --prefix openjdk@N` | `%ProgramFiles%\Eclipse Adoptium`, `where javac` |
+| Package manager | Homebrew | winget, plus the GitHub server's release zip |
+
+`npm install -g` writes a `.cmd` shim on Windows, which `CreateProcess` will not
+run directly, so a registered command goes through `cmd.exe` there. A local
+server's own `verify` command — not the wrapper — is what decides whether it is
+installed, because the shell is present on every machine.
 
 ### Skills
 
@@ -83,8 +105,11 @@ a manual pre-step.
 
 ## Install
 
-See [INSTALL.md](INSTALL.md). It is a numbered list of copy-and-paste commands,
-written for someone who does not code: no editing files, no reading logs.
+- macOS: see [INSTALL.md](INSTALL.md).
+- Windows: see [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md).
+
+Both are numbered lists of copy-and-paste commands, written for someone who does
+not code: no editing files, no reading logs.
 
 ## Develop
 
@@ -95,18 +120,23 @@ npm run verify
 
 ```
 src/
-  index.ts       plugin entry: transforms, hook, tools
-  manifest.ts    desired state: MCPs, skills, providers
-  planner.ts     decides what is missing and what would fix it
-  toolchain.ts   finds Ghidra and the JDK REA needs, from what is installed
-  exec.ts        shell execution and path expansion
-  discovery.ts   gateway /v1/models
-  catalog.ts     models.dev fetch, cache, and merge
-  resolve.ts     vendor-anchored catalog matching
-  provision.ts   conversion to the SDK's model and provider shapes
-  cache.ts       TTL cache with stale fallback
-  policy.ts      update policy text and status formatting
+  index.ts        plugin entry: transforms, hook, tools
+  manifest.ts     desired state: MCPs, skills, providers
+  platform.ts     what the host OS requires: shell, PATH probing, paths
+  installers.ts   installer command lines that differ per platform
+  planner.ts      decides what is missing and what would fix it
+  toolchain.ts    finds Ghidra and the JDK REA needs, from what is installed
+  exec.ts         shell execution and path expansion
+  discovery.ts    gateway /v1/models
+  catalog.ts      models.dev fetch, cache, and merge
+  resolve.ts      vendor-anchored catalog matching
+  provision.ts    conversion to the SDK's model and provider shapes
+  cache.ts        TTL cache with stale fallback
+  policy.ts       update policy text and status formatting
 ```
+
+CI runs the suite on macOS, Linux, and Windows, because a regression in the
+platform layer is invisible on the other two.
 
 ## License
 

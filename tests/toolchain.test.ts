@@ -185,3 +185,159 @@ test("names the Ghidra lines REA accepts", () => {
   assert.ok(!supportedGhidra("12.2"))
   assert.ok(!supportedGhidra("11.4"))
 })
+
+/* --------------------------------------------------------------- Windows */
+
+const WINDOWS_ENV: NodeJS.ProcessEnv = {
+  USERPROFILE: String.raw`C:\Users\me`,
+  ProgramFiles: String.raw`C:\Program Files`,
+  LOCALAPPDATA: String.raw`C:\Users\me\AppData\Local`,
+  Path: String.raw`C:\Windows\system32`,
+}
+
+/** A Windows machine described by the directories and files it holds. */
+function windowsMachine(files: Record<string, string>, directories: Record<string, string[]> = {}): Probe {
+  return probe({
+    run: () => ({ code: 1, stdout: "" }),
+    exists: (path) => path in files,
+    read: (path) => files[path],
+    list: (path) => directories[path] ?? [],
+  })
+}
+
+test("finds a Ghidra release unpacked into the home folder on Windows", () => {
+  const home = String.raw`C:\Users\me\ghidra_12.1.4_PUBLIC`
+  const machine = windowsMachine(
+    { [String.raw`${home}\Ghidra\application.properties`]: "application.version=12.1.4\napplication.java.min=21\n" },
+    { [String.raw`C:\Users\me`]: ["Downloads", "ghidra_12.1.4_PUBLIC"] },
+  )
+
+  const toolchain = resolveToolchain(WINDOWS_ENV, machine, "win32")
+
+  // Explorer's "Extract All" defaults to a sibling folder of the zip, so a
+  // hand-unpacked release is normally here and never on PATH.
+  assert.equal(toolchain.ghidraHome, home)
+})
+
+test("finds a Ghidra release unpacked under Program Files on Windows", () => {
+  const home = String.raw`C:\Program Files\ghidra_12.1.4_PUBLIC`
+  const machine = windowsMachine(
+    { [String.raw`${home}\Ghidra\application.properties`]: "application.version=12.1.4\n" },
+    { [String.raw`C:\Program Files`]: ["ghidra_12.1.4_PUBLIC"] },
+  )
+
+  assert.equal(resolveToolchain(WINDOWS_ENV, machine, "win32").ghidraHome, home)
+})
+
+test("keeps a Windows drive-letter GHIDRA_INSTALL_DIR", () => {
+  const dir = String.raw`D:\tools\ghidra_12.1.4_PUBLIC`
+  const machine = windowsMachine({ [String.raw`${dir}\Ghidra\application.properties`]: "application.version=12.1.4\n" })
+
+  // A POSIX-only absolute check rejects every Windows path, which would leave
+  // REA pointing at nothing on the one platform where it is not on PATH.
+  assert.equal(resolveToolchain({ ...WINDOWS_ENV, GHIDRA_INSTALL_DIR: dir }, machine, "win32").ghidraHome, dir)
+})
+
+test("ignores a relative GHIDRA_INSTALL_DIR on Windows", () => {
+  const machine = windowsMachine({ [String.raw`ghidra\Ghidra\application.properties`]: "application.version=12.1.4\n" })
+  assert.equal(resolveToolchain({ ...WINDOWS_ENV, GHIDRA_INSTALL_DIR: "ghidra" }, machine, "win32").ghidraHome, undefined)
+})
+
+test("finds the JDK Ghidra declares under Program Files", () => {
+  const java = String.raw`C:\Program Files\Eclipse Adoptium\jdk-21.0.5.11-hotspot`
+  const machine = windowsMachine(
+    { [String.raw`${java}\bin\javac.exe`]: "" },
+    { [String.raw`C:\Program Files\Eclipse Adoptium`]: ["jdk-21.0.5.11-hotspot"] },
+  )
+
+  const toolchain = resolveToolchain(WINDOWS_ENV, machine, "win32")
+  assert.equal(toolchain.javaHome, java)
+})
+
+test("prefers the JDK version Ghidra declares on Windows too", () => {
+  const twentyOne = String.raw`C:\Program Files\Eclipse Adoptium\jdk-21`
+  const twentyFive = String.raw`C:\Program Files\Eclipse Adoptium\jdk-25`
+  const files = { [String.raw`${twentyOne}\bin\javac.exe`]: "", [String.raw`${twentyFive}\bin\javac.exe`]: "" }
+  const ghidra = String.raw`C:\Ghidra\ghidra_12.1.4_PUBLIC`
+
+  const machine = windowsMachine(
+    {
+      ...files,
+      [String.raw`${ghidra}\Ghidra\application.properties`]: "application.version=12.1.4\napplication.java.min=21\n",
+    },
+    {
+      [String.raw`C:\Program Files\Eclipse Adoptium`]: ["jdk-21", "jdk-25"],
+      [String.raw`C:\Users\me`]: ["ghidra_12.1.4_PUBLIC"],
+    },
+  )
+
+  // Ghidra declares 21, so 25 must not be chosen just because it is newer.
+  assert.equal(resolveToolchain({ ...WINDOWS_ENV, GHIDRA_INSTALL_DIR: ghidra }, machine, "win32").javaHome, twentyOne)
+})
+
+test("does not mistake jdk-25 for jdk-2", () => {
+  const wrong = String.raw`C:\Program Files\Eclipse Adoptium\jdk-210`
+  const right = String.raw`C:\Program Files\Eclipse Adoptium\jdk-21`
+  const machine = windowsMachine(
+    { [String.raw`${wrong}\bin\javac.exe`]: "", [String.raw`${right}\bin\javac.exe`]: "" },
+    // `jdk-210` contains "21" but is not the 21 line.
+    { [String.raw`C:\Program Files\Eclipse Adoptium`]: ["jdk-210", "jdk-21"] },
+  )
+
+  assert.equal(resolveToolchain(WINDOWS_ENV, machine, "win32").javaHome, right)
+})
+
+test("falls back to the javac already on PATH on Windows", () => {
+  const java = String.raw`C:\Program Files\Java\jdk-21`
+  const machine = probe({
+    run: (command) =>
+      command.startsWith("where javac") ? { code: 0, stdout: `${java}\\bin\\javac.exe\r\n` } : { code: 1, stdout: "" },
+    exists: () => false,
+  })
+
+  // A machine where the JDK is on PATH but JAVA_HOME was never exported is the
+  // common case after a winget install.
+  assert.equal(resolveToolchain(WINDOWS_ENV, machine, "win32").javaHome, java)
+})
+
+test("keeps a Windows JAVA_HOME that holds javac.exe", () => {
+  const java = String.raw`C:\jdk\21`
+  const machine = windowsMachine({ [String.raw`${java}\bin\javac.exe`]: "" })
+
+  assert.equal(resolveToolchain({ ...WINDOWS_ENV, JAVA_HOME: java }, machine, "win32").javaHome, java)
+})
+
+test("an empty JAVA_HOME counts as unset on Windows", () => {
+  const java = String.raw`C:\Program Files\Eclipse Adoptium\jdk-21`
+  const machine = windowsMachine(
+    { [String.raw`${java}\bin\javac.exe`]: "" },
+    { [String.raw`C:\Program Files\Eclipse Adoptium`]: ["jdk-21"] },
+  )
+
+  assert.equal(resolveToolchain({ ...WINDOWS_ENV, JAVA_HOME: "" }, machine, "win32").javaHome, java)
+})
+
+test("reports nothing when a Windows machine has neither tool", () => {
+  const toolchain = resolveToolchain(WINDOWS_ENV, probe(), "win32")
+  assert.equal(toolchain.ghidraHome, undefined)
+  assert.equal(toolchain.javaHome, undefined)
+})
+
+test("a POSIX machine never scans Windows install directories", () => {
+  const asked: string[] = []
+  const machine = probe({
+    run: (command) => {
+      asked.push(command)
+      return { code: 1, stdout: "" }
+    },
+    exists: () => false,
+    list: (path) => {
+      asked.push(`list:${path}`)
+      return []
+    },
+  })
+
+  resolveToolchain({ HOME: "/Users/me", ProgramFiles: String.raw`C:\Program Files` }, machine, "darwin")
+
+  assert.ok(asked.every((entry) => !entry.includes("C:" )), asked.join(", "))
+})

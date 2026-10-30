@@ -11,7 +11,14 @@ permissions:
 
 jobs:
   verify:
-    runs-on: macos-latest
+    # The plugin claims to run on both families, so both are checked. A
+    # Windows-only regression (PATHEXT, drive letters, `sh` vs PowerShell) is
+    # invisible on macOS and vice versa.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
 

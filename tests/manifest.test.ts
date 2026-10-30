@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { brewPackages, mcps, providers, skills } from "../src/manifest.ts"
+import { basePackages, brewPackages, commandFor, mcps, providers, skills } from "../src/manifest.ts"
 
 test("registers exactly the requested MCP servers", () => {
   assert.deepEqual(
@@ -59,9 +59,22 @@ test("local MCPs declare how to install and verify their prerequisites", () => {
 test("GitHub runs its Homebrew binary and limits the advertised toolsets", () => {
   const github = mcps.find((m) => m.id === "github")
   assert.ok(github)
-  const config = github.config({})
+  const config = github.config({}, "darwin")
   assert.deepEqual(config.command, ["sh", "-c", 'GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token)" exec github-mcp-server stdio'])
   assert.equal((config.environment as Record<string, string>).GITHUB_TOOLSETS, "context,repos,issues,pull_requests,actions")
+  assert.equal((config.environment as Record<string, string>).GITHUB_PERSONAL_ACCESS_TOKEN, undefined)
+})
+
+test("GitHub registers a Windows-runnable command on Windows", () => {
+  const github = mcps.find((m) => m.id === "github")
+  assert.ok(github)
+  const config = github.config({}, "win32")
+  const command = config.command as string[]
+
+  // `sh` does not exist on Windows, so the POSIX form would leave the server
+  // permanently unable to start.
+  assert.notEqual(command[0], "sh")
+  assert.equal(command[0], "powershell.exe")
   assert.equal((config.environment as Record<string, string>).GITHUB_PERSONAL_ACCESS_TOKEN, undefined)
 })
 
@@ -147,4 +160,58 @@ test("Homebrew installs the GitHub server but never Ghidra", () => {
   // Listing it here would provision a Ghidra that REA reports as config_drift.
   assert.ok(!brewPackages.formulae.includes("ghidra"))
   assert.ok(!brewPackages.casks.includes("ghidra" as never))
+})
+
+test("winget covers the same base set, minus what it cannot provide", () => {
+  const packages = basePackages("win32")
+  assert.equal(packages.manager, "winget")
+  assert.ok(packages.packages.includes("GitHub.cli"))
+  assert.ok(packages.packages.includes("OpenJS.NodeJS.LTS"))
+  assert.ok(packages.packages.includes("EclipseAdoptium.Temurin.21.JDK"))
+  assert.ok(packages.packages.includes("astral-sh.uv"))
+
+  // Neither has a winget manifest; the guide installs both from their release.
+  assert.deepEqual(packages.manual, ["github-mcp-server", "ghidra"])
+  assert.ok(!packages.packages.includes("github-mcp-server"))
+})
+
+test("the macOS base set keeps Homebrew and needs no manual step", () => {
+  const packages = basePackages("darwin")
+  assert.equal(packages.manager, "brew")
+  assert.deepEqual(packages.manual, [])
+  assert.ok(packages.packages.includes("gh"))
+})
+
+test("REA names the executable its platform actually has", () => {
+  const rea = mcps.find((m) => m.id === "rea")
+  assert.ok(rea)
+  // POSIX spawns the binary directly.
+  assert.deepEqual(rea.config({}, "darwin").command, ["rea", "mcp"])
+  // A `.cmd` shim cannot be spawned directly on Windows, so it goes through an
+  // interpreter that can run one.
+  assert.deepEqual(rea.config({}, "win32").command, ["cmd.exe", "/d", "/s", "/c", "rea mcp"])
+})
+
+test("every local MCP resolves to a command on both platforms", () => {
+  for (const id of ["rea", "graphify", "github"]) {
+    const mcp = mcps.find((m) => m.id === id)
+    assert.ok(mcp)
+    for (const platform of ["darwin", "win32"] as const) {
+      const config = mcp.config({}, platform)
+      assert.equal(config.type, "local", `${id} ${platform}`)
+      assert.ok(Array.isArray(config.command), `${id} ${platform} command`)
+      assert.ok((config.command as string[]).length > 0, `${id} ${platform} argv`)
+    }
+  }
+})
+
+test("every local MCP can be installed on at least one platform", () => {
+  for (const id of ["rea", "graphify", "github"]) {
+    const mcp = mcps.find((m) => m.id === id)
+    assert.ok(mcp)
+    const installable = (["darwin", "linux", "win32"] as const).some((platform) =>
+      Boolean(commandFor(mcp.install ?? "", platform)),
+    )
+    assert.ok(installable, `${id} has no installer on any platform`)
+  }
 })
